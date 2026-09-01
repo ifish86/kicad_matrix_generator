@@ -1,0 +1,227 @@
+(footprint "LED3535"
+	(version 20240108)
+	(generator "pcbnew")
+	(generator_version "8.0")
+	(layer "F.Cu")
+	(property "Reference" "REF**"
+		(at 0.127 -2.5654 0)
+		(layer "F.SilkS")
+		(uuid "08e36e14-c20e-4d27-9cfa-428e142fd2b0")
+		(effects
+			(font
+				(size 0.64 0.64)
+				(thickness 0.1)
+			)
+		)
+	)
+	(property "Value" "LED3535"
+		(at -0.3556 2.3368 0)
+		(layer "F.Fab")
+		(uuid "671e648c-cc3c-45c1-9ef5-394ee3c1c6a1")
+		(effects
+			(font
+				(size 0.32 0.32)
+				(thickness 0.08)
+			)
+		)
+	)
+	(property "Footprint" ""
+		(at 0 0 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "b3029f24-9251-4c6b-b2a4-6045b4e0f6c9")
+		(effects
+			(font
+				(size 1.27 1.27)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Datasheet" ""
+		(at 0 0 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "320d8833-8903-44b9-8ef9-770319a8fbb5")
+		(effects
+			(font
+				(size 1.27 1.27)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Description" ""
+		(at 0 0 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "fbfac99e-6864-49f6-b83f-7f6eb98b2c36")
+		(effects
+			(font
+				(size 1.27 1.27)
+				(thickness 0.15)
+			)
+		)
+	)
+	(attr smd)
+	(fp_line
+		(start -1.9 -1.9)
+		(end 1.9 -1.9)
+		(stroke
+			(width 0.127)
+			(type solid)
+		)
+		(layer "F.SilkS")
+		(uuid "111e23bd-e585-4b8b-b604-40372fd7de97")
+	)
+	(fp_line
+		(start -1.9 -1.6)
+		(end -1.9 -1.9)
+		(stroke
+			(width 0.127)
+			(type solid)
+		)
+		(layer "F.SilkS")
+		(uuid "16750e7e-9f6d-479d-8b1c-f595695c0242")
+	)
+	(fp_line
+		(start -1.9 1.6)
+		(end -1.9 1.9)
+		(stroke
+			(width 0.127)
+			(type solid)
+		)
+		(layer "F.SilkS")
+		(uuid "1d82b879-2cb3-4587-be79-f8b1cb9adbf5")
+	)
+	(fp_line
+		(start -1.9 1.9)
+		(end 1.9 1.9)
+		(stroke
+			(width 0.127)
+			(type solid)
+		)
+		(layer "F.SilkS")
+		(uuid "70fa5509-5fd1-4dd5-a6e8-3d62a421e02d")
+	)
+	(fp_line
+		(start 1.9 -1.9)
+		(end 1.9 -1.6)
+		(stroke
+			(width 0.127)
+			(type solid)
+		)
+		(layer "F.SilkS")
+		(uuid "66728553-2dee-4174-94bf-c604a4511530")
+	)
+	(fp_line
+		(start 1.9 1.9)
+		(end 1.9 1.6)
+		(stroke
+			(width 0.127)
+			(type solid)
+		)
+		(layer "F.SilkS")
+		(uuid "363d898f-a498-4c62-acde-82aefb234073")
+	)
+	(fp_poly
+		(pts
+			(xy -1.905 -1.905) (xy -1.905 -1.524) (xy -1.524 -1.524) (xy -1.143 -1.905)
+		)
+		(stroke
+			(width 0.127)
+			(type solid)
+		)
+		(fill solid)
+		(layer "F.SilkS")
+		(uuid "4d91a828-f90c-4115-b03a-59c7dacc9fbb")
+	)
+	(fp_line
+		(start -1.75 -1.75)
+		(end 1.75 -1.75)
+		(stroke
+			(width 0.127)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "b46741dd-10f2-48b5-a689-36c6dc788d99")
+	)
+	(fp_line
+		(start -1.75 1.75)
+		(end -1.75 -1.75)
+		(stroke
+			(width 0.127)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "a3890381-11c6-4f67-809f-9ee53c17394e")
+	)
+	(fp_line
+		(start 1.75 -1.75)
+		(end 1.75 1.75)
+		(stroke
+			(width 0.127)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "fb31b537-51af-4dfa-963f-68e67c5190d9")
+	)
+	(fp_line
+		(start 1.75 1.75)
+		(end -1.75 1.75)
+		(stroke
+			(width 0.127)
+			(type solid)
+		)
+		(layer "F.Fab")
+		(uuid "ba45405d-cee5-4bc7-85cf-47a9971ec8d0")
+	)
+	(fp_circle
+		(center 0 0)
+		(end 1.4 0)
+		(stroke
+			(width 0.127)
+			(type solid)
+		)
+		(fill none)
+		(layer "F.Fab")
+		(uuid "371cbc68-3c6f-4590-8186-d2ea959d48b2")
+	)
+	(pad "1" smd rect
+		(at -1.75 -0.875)
+		(size 1 0.85)
+		(layers "F.Cu" "F.Paste" "F.Mask")
+		(solder_mask_margin 0.102)
+		(uuid "3a9f2b59-a609-45c2-b9f6-767e3b51c9a3")
+	)
+	(pad "2" smd rect
+		(at -1.75 0.875)
+		(size 1 0.85)
+		(layers "F.Cu" "F.Paste" "F.Mask")
+		(solder_mask_margin 0.102)
+		(uuid "88bc3594-1198-41be-95ae-20ae9c212575")
+	)
+	(pad "3" smd rect
+		(at 1.75 0.875)
+		(size 1 0.85)
+		(layers "F.Cu" "F.Paste" "F.Mask")
+		(solder_mask_margin 0.102)
+		(uuid "a06c9a8d-b755-4af1-ab23-f4506293e2c2")
+	)
+	(pad "4" smd rect
+		(at 1.75 -0.875)
+		(size 1 0.85)
+		(layers "F.Cu" "F.Paste" "F.Mask")
+		(solder_mask_margin 0.102)
+		(uuid "b772a270-a614-4e4f-8a7f-f5896e75412c")
+	)
+	(model "${KIPRJMOD}/Libraries/LED_Models/SMD WS2812B Mini 3535.step"
+		(offset
+			(xyz 0 0 2)
+		)
+		(scale
+			(xyz 1 1 1)
+		)
+		(rotate
+			(xyz -90 0 90)
+		)
+	)
+)
