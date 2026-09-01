@@ -13,14 +13,20 @@
 import { parse, serialize, list, str, atom, op, children, child, walk, clone } from './sexpr.js'
 import { uuid } from './uuid.js'
 import {
-  makeSwitchSymbol,
+  SWITCH_SYMBOL_FOR,
+  LED_SYMBOL_FOR,
+  libSymbol,
+  symbolPins,
+  symbolBounds,
+  symbolProperty,
+  setSymbolFootprint,
+  renameSymbol,
+  ledPinNumbers,
   makeDiodeSymbol,
-  makeLedSymbol,
   makeControllerSymbol,
   makePowerFlagSymbol,
   controllerPinNumbers
 } from './symbols.js'
-import { ledPadFunction } from './ledpins.js'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -261,37 +267,96 @@ const PCB_SETUP = `(setup
 
 // ---------------------------------------------------------------------------
 // Schematic builders
+//
+// IMPORTANT: KiCad schematic files are in MILLIMETRES, on a 1.27 mm (50 mil)
+// grid. Every coordinate below is mm. Wire endpoints are derived from the real
+// pin coordinates of the symbols rather than assumed, so a symbol edit in the
+// library can never silently disconnect the generated wiring.
 
-function instProp(key, value, x, y, hide = false) {
+const GRID = 1.27
+const SHEET_MARGIN = 12.7
+const TITLE_BLOCK_H = 38.1 // reserved strip at the bottom of the sheet
+const MAX_PAGE_MM = 1200 // KiCad's maximum user page size
+const LEAD = 2.54 // wire stub from a pin to a label or the next part
+const LABEL_W = 11.43 // room reserved for global-label text + its flag
+const TEXT_H = 2.54
+
+const snap = (v) => Math.round(v / GRID) * GRID
+
+/** Schematic position of a symbol pin. Library symbols use +Y up, schematics
+ *  use +Y down, so the Y offset is negated. */
+function pinPos(instX, instY, p) {
+  return { x: r4(instX + p.x), y: r4(instY - p.y) }
+}
+
+/** Look a pin up by number; throws rather than silently misplacing a wire. */
+function pinByNumber(pins, number, symbolName) {
+  const found = pins.find((p) => p.number === String(number))
+  if (!found) throw new Error(`Symbol ${symbolName} has no pin ${number}`)
+  return found
+}
+
+function pinByName(pins, name, symbolName) {
+  const found = pins.find((p) => p.name === name)
+  if (!found) throw new Error(`Symbol ${symbolName} has no pin named ${name}`)
+  return found
+}
+
+function instProp(key, value, x, y, opts = {}) {
+  const { hide = false, justify = null, angle = 0 } = opts
+  const justifyNode = justify ? list('justify', ...justify.split(' ').map((j) => atom(j))) : null
   return list(
     'property',
     str(key),
     str(value),
-    list('at', atom(x), atom(y), atom(0)),
+    list('at', atom(mm(x)), atom(mm(y)), atom(angle)),
     list(
       'effects',
       list('font', list('size', atom(1.27), atom(1.27))),
+      ...(justifyNode ? [justifyNode] : []),
       ...(hide ? [list('hide', atom('yes'))] : [])
     )
   )
 }
 
-function symbolInstance(lib, symbolName, ref, value, footprint, x, y, pinNumbers, rootSheet, projectName, opts = {}) {
-  const { inBom = true, onBoard = true } = opts
+/**
+ * A placed symbol. `refAt` is the Reference-text offset relative to the symbol
+ * origin; Value/Footprint/Datasheet are hidden because a matrix schematic
+ * repeats the same part hundreds of times (they remain in the BOM).
+ */
+function symbolInstance(opts) {
+  const {
+    lib,
+    symbolName,
+    ref,
+    value,
+    footprint,
+    x,
+    y,
+    pinNumbers,
+    rootSheet,
+    projectName,
+    inBom = true,
+    onBoard = true,
+    refAt = [0, -5.08],
+    refJustify = null,
+    showValue = false,
+    valueAt = [0, 5.08]
+  } = opts
   return list(
     'symbol',
     list('lib_id', str(`${lib}:${symbolName}`)),
-    list('at', atom(x), atom(y), atom(0)),
+    list('at', atom(mm(x)), atom(mm(y)), atom(0)),
     list('unit', atom(1)),
     list('exclude_from_sim', atom('no')),
     list('in_bom', atom(inBom ? 'yes' : 'no')),
     list('on_board', atom(onBoard ? 'yes' : 'no')),
     list('dnp', atom('no')),
     list('uuid', str(uuid())),
-    instProp('Reference', ref, x, y - 150),
-    instProp('Value', value, x, y + 150),
-    instProp('Footprint', footprint, x, y + 250, true),
-    instProp('Datasheet', '', x, y + 350, true),
+    instProp('Reference', ref, r4(x + refAt[0]), r4(y + refAt[1]), { justify: refJustify }),
+    instProp('Value', value, r4(x + valueAt[0]), r4(y + valueAt[1]), { hide: !showValue }),
+    instProp('Footprint', footprint, x, y, { hide: true }),
+    instProp('Datasheet', '', x, y, { hide: true }),
     ...pinNumbers.map((n) => list('pin', str(String(n)), list('uuid', str(uuid())))),
     list(
       'instances',
@@ -307,189 +372,537 @@ function symbolInstance(lib, symbolName, ref, value, footprint, x, y, pinNumbers
 function wire(x1, y1, x2, y2) {
   return list(
     'wire',
-    list('pts', list('xy', atom(x1), atom(y1)), list('xy', atom(x2), atom(y2))),
+    list('pts', list('xy', atom(mm(x1)), atom(mm(y1))), list('xy', atom(mm(x2)), atom(mm(y2)))),
     list('stroke', list('width', atom(0)), list('type', atom('default'))),
     list('uuid', str(uuid()))
   )
 }
 
-function label(name, x, y) {
+function label(name, x, y, angle = 0) {
   return list(
     'label',
     str(name),
-    list('at', atom(x), atom(y), atom(0)),
-    list('effects', list('font', list('size', atom(1.27), atom(1.27))), list('justify', atom('left'))),
+    list('at', atom(mm(x)), atom(mm(y)), atom(angle)),
+    list(
+      'effects',
+      list('font', list('size', atom(1.27), atom(1.27))),
+      list('justify', atom(angle === 180 ? 'right' : 'left'), atom('bottom'))
+    ),
     list('uuid', str(uuid()))
   )
 }
 
-function globalLabel(name, x, y) {
+function globalLabel(name, x, y, angle = 0, shape = 'bidirectional') {
   return list(
     'global_label',
     str(name),
-    list('shape', atom('input')),
-    list('at', atom(x), atom(y), atom(0)),
-    list('effects', list('font', list('size', atom(1.27), atom(1.27))), list('justify', atom('left'))),
+    list('shape', atom(shape)),
+    list('at', atom(mm(x)), atom(mm(y)), atom(angle)),
+    list(
+      'effects',
+      list('font', list('size', atom(1.27), atom(1.27))),
+      list('justify', atom(angle === 180 ? 'right' : 'left'))
+    ),
     list('uuid', str(uuid())),
     list(
       'property',
       str('Intersheetrefs'),
       str('${INTERSHEET_REFS}'),
       list('at', atom(0), atom(0), atom(0)),
-      list('effects', list('font', list('size', atom(1.27), atom(1.27))), list('justify', atom('left')), list('hide', atom('yes')))
+      list(
+        'effects',
+        list('font', list('size', atom(1.27), atom(1.27))),
+        list('justify', atom('left')),
+        list('hide', atom('yes'))
+      )
     )
   )
 }
 
-function buildSchematic(c, nets, pins, rootSheet) {
-  const lib = c.name
-  const symbols = []
-  if (c.hasSwitches) {
-    symbols.push(makeSwitchSymbol())
-    symbols.push(makeDiodeSymbol())
-  }
-  if (c.hasLeds) symbols.push(makeLedSymbol(pins.led))
-  symbols.push(makeControllerSymbol(c.hasSwitches ? c.rows : 0, c.hasSwitches ? c.cols : 0, c.hasLeds))
-  if (c.hasLeds) symbols.push(makePowerFlagSymbol())
+function schText(content, x, y, size = 2.54) {
+  return list(
+    'text',
+    str(content),
+    list('at', atom(mm(x)), atom(mm(y)), atom(0)),
+    list(
+      'effects',
+      list('font', list('size', atom(size), atom(size))),
+      list('justify', atom('left'), atom('bottom'))
+    ),
+    list('uuid', str(uuid()))
+  )
+}
 
-  // In the schematic's embedded lib_symbols section, symbol names must match
-  // the instance lib_id, i.e. they carry the full "library:name" prefix.
-  for (const s of symbols) {
-    s.items[1] = str(`${lib}:${s.items[1].v}`)
-  }
-
+/**
+ * Collects schematic items and tracks the bounding box of everything placed,
+ * so the paper size can be chosen to actually contain the drawing.
+ */
+function makeSheet() {
   const items = []
+  const libSymbols = []
+  const bbox = { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity }
+  const cover = (x, y) => {
+    bbox.minX = Math.min(bbox.minX, x)
+    bbox.maxX = Math.max(bbox.maxX, x)
+    bbox.minY = Math.min(bbox.minY, y)
+    bbox.maxY = Math.max(bbox.maxY, y)
+  }
+  return {
+    items,
+    libSymbols,
+    bbox,
+    cover,
+    coverBox(x1, y1, x2, y2) {
+      cover(x1, y1)
+      cover(x2, y2)
+    },
+    add(node) {
+      items.push(node)
+      return node
+    },
+    /** Place a symbol and extend the bbox by its library bounds (Y flipped). */
+    place(node, x, y, bounds) {
+      items.push(node)
+      cover(x + bounds.minX, y - bounds.maxY)
+      cover(x + bounds.maxX, y - bounds.minY)
+      return node
+    },
+    wire(x1, y1, x2, y2) {
+      items.push(wire(x1, y1, x2, y2))
+      cover(x1, y1)
+      cover(x2, y2)
+    },
+    label(name, x, y, angle = 0) {
+      items.push(label(name, x, y, angle))
+      coverLabel(cover, name, x, y, angle)
+    },
+    globalLabel(name, x, y, angle = 0, shape = 'bidirectional') {
+      items.push(globalLabel(name, x, y, angle, shape))
+      coverLabel(cover, name, x, y, angle)
+    },
+    text(content, x, y, size = 2.54) {
+      items.push(schText(content, x, y, size))
+      cover(x, y - size)
+      cover(x + content.length * size * 0.7, y)
+    }
+  }
+}
 
+/** Approximate ink extent of a label so it is not clipped by the page edge. */
+function coverLabel(cover, name, x, y, angle) {
+  const len = name.length * 1.0 + 3.0 // ~1 mm per glyph at size 1.27, plus flag
+  if (angle === 180) {
+    cover(x - len, y - TEXT_H)
+    cover(x, y + TEXT_H)
+  } else if (angle === 90) {
+    cover(x - TEXT_H, y - len)
+    cover(x + TEXT_H, y)
+  } else if (angle === 270) {
+    cover(x - TEXT_H, y)
+    cover(x + TEXT_H, y + len)
+  } else {
+    cover(x, y - TEXT_H)
+    cover(x + len, y + TEXT_H)
+  }
+}
+
+/**
+ * How many cells to put in a schematic row.
+ *
+ * One matrix column per schematic column is preferred, so the drawing mirrors
+ * the board. That shape is only kept while the resulting block also fits the
+ * height available; otherwise rows are widened until it does, which is what
+ * lets a tall drawing use the width of the sheet instead of demanding a bigger
+ * one.
+ */
+function cellsPerRow(count, preferred, cellW, cellH, availW, availH) {
+  const maxFit = Math.max(1, Math.min(count, Math.floor(availW / cellW)))
+  const blockH = (per) => Math.ceil(count / per) * cellH
+  const wanted = preferred > 0 ? Math.min(preferred, count) : 0
+  if (wanted > 0 && wanted <= maxFit && blockH(wanted) <= availH) return wanted
+  const maxRows = Math.max(1, Math.floor(availH / cellH))
+  const needed = Math.max(1, Math.ceil(count / maxRows))
+  return Math.max(1, Math.min(maxFit, Math.max(needed, wanted || 1)))
+}
+
+const PAPER_SIZES = [
+  ['A4', 297, 210],
+  ['A3', 420, 297],
+  ['A2', 594, 420],
+  ['A1', 841, 594],
+  ['A0', 1189, 841]
+]
+
+/**
+ * Lay the schematic out, then pick the smallest sheet that holds it. The two
+ * are circular — how wide the rows are decides how tall the drawing is — so the
+ * layout is re-run for each candidate sheet and the first one that fits wins.
+ * That keeps the drawing filling the page instead of a narrow strip down one
+ * side of an oversized sheet.
+ */
+function buildSchematic(c, nets, pins, rootSheet, symlib) {
+  let last = null
+  for (const [, pw, ph] of PAPER_SIZES) {
+    const sheet = layoutSchematic(c, pins, rootSheet, symlib, pw - 2 * SHEET_MARGIN, ph)
+    last = { sheet, pw, ph }
+    if (fitsPage(sheet, pw, ph)) return assembleSchematic(c, rootSheet, sheet, [pw, ph], PAPER_SIZES.find((s) => s[1] === pw)[0])
+  }
+  // Nothing standard fits: fall back to a custom sheet, capped at KiCad's limit.
+  const sheet = layoutSchematic(c, pins, rootSheet, symlib, MAX_PAGE_MM - 2 * SHEET_MARGIN, MAX_PAGE_MM)
+  const uw = Math.min(MAX_PAGE_MM, Math.ceil(sheet.bbox.maxX + SHEET_MARGIN))
+  const uh = Math.min(MAX_PAGE_MM, Math.ceil(sheet.bbox.maxY + SHEET_MARGIN + TITLE_BLOCK_H))
+  if (!fitsPage(sheet, uw, uh)) {
+    throw new Error(
+      `A ${c.rows} x ${c.cols} ${c.type} matrix needs a schematic sheet of about ` +
+        `${Math.ceil(sheet.bbox.maxX + 2 * SHEET_MARGIN)} x ` +
+        `${Math.ceil(sheet.bbox.maxY + SHEET_MARGIN + TITLE_BLOCK_H)} mm, which is larger than ` +
+        `KiCad's ${MAX_PAGE_MM} mm maximum page. Reduce the matrix size — roughly 640 LEDs, ` +
+        `or 200 keys plus LEDs, fit on one sheet.`
+    )
+  }
+  return assembleSchematic(c, rootSheet, sheet, [uw, uh], 'User')
+}
+
+/** Does the drawing clear the page edges and the title block? */
+function fitsPage(sheet, pw, ph) {
+  return (
+    sheet.bbox.minX >= 0 &&
+    sheet.bbox.minY >= 0 &&
+    sheet.bbox.maxX <= pw - SHEET_MARGIN &&
+    sheet.bbox.maxY <= ph - TITLE_BLOCK_H
+  )
+}
+
+function layoutSchematic(c, pins, rootSheet, symlib, availW, pageH) {
+  const lib = c.name
+  const sheet = makeSheet()
+
+  // --- symbols used by this board -----------------------------------------
+  const libSymbols = sheet.libSymbols
+
+  let swSym = null
+  let swPins = null
+  let dSym = null
+  let dPins = null
   if (c.hasSwitches) {
-    const originX = 1000
-    const originY = 1000
-    for (let r = 0; r < c.rows; r++) {
-      for (let col = 0; col < c.cols; col++) {
-        const sx = originX + col * 900
-        const sy = originY + r * 500
-        const ref = `SW${r * c.cols + col + 1}`
-        const dRef = `D${r * c.cols + col + 1}`
-        items.push(symbolInstance(lib, 'SW_Push', ref, 'SW_Push', `${lib}:${c.switchFootprint}`, sx, sy, ['1', '2'], rootSheet, lib))
-        items.push(symbolInstance(lib, 'D_Small', dRef, '1N4148W', `${lib}:D_SOD123`, sx + 360, sy, ['2', '1'], rootSheet, lib))
-        // switch pin 1 (left, -200 mils) -> ROW net
-        items.push(wire(sx - 200, sy, sx - 260, sy))
-        items.push(globalLabel(`ROW${r}`, sx - 260, sy))
-        // switch pin 2 (right, +200 mils) -> diode anode (per-key net)
-        items.push(wire(sx + 200, sy, sx + 260, sy))
-        items.push(label(`SW${r}_${col}`, sx + 230, sy))
-        // diode cathode -> COL net
-        items.push(wire(sx + 460, sy, sx + 520, sy))
-        items.push(globalLabel(`COL${col}`, sx + 520, sy))
-      }
-    }
+    const swName = SWITCH_SYMBOL_FOR[c.switchFootprint]
+    if (!swName) throw new Error(`No schematic symbol mapped for switch footprint ${c.switchFootprint}`)
+    swSym = libSymbol(symlib, swName)
+    setSymbolFootprint(swSym, `${lib}:${c.switchFootprint}`)
+    swPins = symbolPins(swSym)
+    dSym = makeDiodeSymbol()
+    setSymbolFootprint(dSym, `${lib}:D_SOD123`)
+    dPins = symbolPins(dSym)
   }
 
+  let ledSym = null
+  let ledPins = null
   if (c.hasLeds) {
-    const originX = 1000
-    const originY = c.hasSwitches ? 1000 + c.rows * 500 + 600 : 1000
-    const n = c.rows * c.cols
-    for (let r = 0; r < c.rows; r++) {
-      for (let col = 0; col < c.cols; col++) {
-        const lx = originX + col * 1200
-        const ly = originY + r * 1000
-        const k = snakeIndex(c, r, col)
-        const ref = `LED${r * c.cols + col + 1}`
-        items.push(
-          symbolInstance(lib, 'WS2812B', ref, 'WS2812B', `${lib}:${c.ledFootprint}`, lx, ly, Object.values(pins.led), rootSheet, lib)
-        )
-        // VDD (top)
-        items.push(wire(lx, ly + 300, lx, ly + 400))
-        items.push(globalLabel('VDD', lx, ly + 400))
-        // GND (bottom)
-        items.push(wire(lx, ly - 300, lx, ly - 400))
-        items.push(globalLabel('GND', lx, ly - 400))
-        // DIN (left)
-        items.push(wire(lx - 300, ly, lx - 400, ly))
-        if (k === 0) items.push(globalLabel('DATA_IN', lx - 400, ly))
-        else items.push(label(dataNetName(k, n), lx - 400, ly))
-        // DOUT (right)
-        items.push(wire(lx + 300, ly, lx + 400, ly))
-        if (k + 1 === n) items.push(globalLabel('DATA_OUT', lx + 400, ly))
-        else items.push(label(dataNetName(k + 1, n), lx + 400, ly))
-      }
-    }
+    const ledName = LED_SYMBOL_FOR[c.ledFootprint]
+    if (!ledName) throw new Error(`No schematic symbol mapped for LED footprint ${c.ledFootprint}`)
+    ledSym = libSymbol(symlib, ledName)
+    setSymbolFootprint(ledSym, `${lib}:${c.ledFootprint}`)
+    ledPins = symbolPins(ledSym)
   }
 
-  // Controller block (schematic-only placeholder) + ERC power flags.
   const ctrlRows = c.hasSwitches ? c.rows : 0
   const ctrlCols = c.hasSwitches ? c.cols : 0
-  const leftCount = ctrlRows + (c.hasLeds ? 1 : 0)
-  const rightCount = ctrlCols + (c.hasLeds ? 2 : 0)
-  const ctrlTop = (Math.max(leftCount, rightCount) - 1) * 50 // mils
-  const cx = 300
-  const cy = 1000
+  const mcuSym = makeControllerSymbol(ctrlRows, ctrlCols, c.hasLeds)
+  const mcuPins = symbolPins(mcuSym)
+  const flagSym = c.hasLeds ? makePowerFlagSymbol() : null
 
-  items.push(
-    symbolInstance(
+  const swSymName = c.hasSwitches ? swSym.items[1].v : null
+  const ledSymName = c.hasLeds ? ledSym.items[1].v : null
+  const swValue = c.hasSwitches ? symbolProperty(swSym, 'Value') || swSymName : ''
+  const ledValue = c.hasLeds ? symbolProperty(ledSym, 'Value') || ledSymName : ''
+
+  for (const s of [swSym, dSym, ledSym, mcuSym, flagSym]) {
+    if (!s) continue
+    const bare = s.items[1].v
+    renameSymbol(s, `${lib}:${bare}`)
+    libSymbols.push(s)
+  }
+
+  const symName = (s) => s.items[1].v.split(':').slice(1).join(':')
+
+  // --- controller block (top-left) ----------------------------------------
+  const mcuBounds = symbolBounds(mcuSym)
+  const mcuX = snap(SHEET_MARGIN + LABEL_W - mcuBounds.minX)
+  const mcuY = snap(SHEET_MARGIN + TEXT_H * 2 + mcuBounds.maxY)
+
+  sheet.text('Controller', SHEET_MARGIN, snap(SHEET_MARGIN + TEXT_H), 2.54)
+  sheet.place(
+    symbolInstance({
       lib,
-      'MCU',
-      'U1',
-      'Controller',
-      '',
-      cx,
-      cy,
-      controllerPinNumbers(ctrlRows, ctrlCols, c.hasLeds),
+      symbolName: symName(mcuSym),
+      ref: 'U1',
+      value: 'Controller',
+      footprint: '',
+      x: mcuX,
+      y: mcuY,
+      pinNumbers: controllerPinNumbers(ctrlRows, ctrlCols, c.hasLeds),
       rootSheet,
-      lib,
-      { inBom: false, onBoard: false }
-    )
+      projectName: lib,
+      inBom: false,
+      onBoard: false,
+      refAt: [0, r4(-mcuBounds.maxY - 2.54)],
+      showValue: true,
+      valueAt: [0, r4(-mcuBounds.minY + 2.54)]
+    }),
+    mcuX,
+    mcuY,
+    mcuBounds
   )
-  for (let i = 0; i < ctrlRows; i++) {
-    const y = cy + ctrlTop - i * 100
-    items.push(wire(cx - 100, y, cx - 200, y))
-    items.push(globalLabel(`ROW${i}`, cx - 200, y))
+
+  for (const p of mcuPins) {
+    const pt = pinPos(mcuX, mcuY, p)
+    const left = p.x < 0
+    const ex = r4(pt.x + (left ? -LEAD : LEAD))
+    sheet.wire(pt.x, pt.y, ex, pt.y)
+    const net = p.name === 'DATA' ? 'DATA_IN' : p.name
+    const shape =
+      p.name === 'DATA' ? 'output' : p.name === 'VDD' || p.name === 'GND' ? 'input' : 'bidirectional'
+    sheet.globalLabel(net, ex, pt.y, left ? 180 : 0, shape)
   }
-  for (let j = 0; j < ctrlCols; j++) {
-    const y = cy + ctrlTop - j * 100
-    items.push(wire(cx + 100, y, cx + 200, y))
-    items.push(globalLabel(`COL${j}`, cx + 200, y))
-  }
+
+  let cursorY = snap(sheet.bbox.maxY + 12.7)
+
+  // --- power flags (VDD / GND driven, keeps ERC quiet) ---------------------
   if (c.hasLeds) {
-    const gndY = cy + ctrlTop - ctrlRows * 100
-    items.push(wire(cx - 100, gndY, cx - 200, gndY))
-    items.push(globalLabel('GND', cx - 200, gndY))
-    const vddY = cy + ctrlTop - ctrlCols * 100
-    items.push(wire(cx + 100, vddY, cx + 200, vddY))
-    items.push(globalLabel('VDD', cx + 200, vddY))
-    const dataY = cy + ctrlTop - (ctrlCols + 1) * 100
-    items.push(wire(cx + 100, dataY, cx + 200, dataY))
-    items.push(globalLabel('DATA_IN', cx + 200, dataY))
-
-    // Power flags below the matrix
-    const flagY =
-      1000 +
-      (c.hasSwitches ? c.rows * 500 : 0) +
-      (c.hasSwitches && c.hasLeds ? 600 : 0) +
-      (c.hasLeds ? c.rows * 1000 : 0) +
-      500
-    items.push(symbolInstance(lib, 'PWR_FLAG', '#FLG1', 'PWR_FLAG', '', 1000, flagY, ['1'], rootSheet, lib, { inBom: false, onBoard: false }))
-    items.push(wire(1000, flagY, 1000, flagY + 100))
-    items.push(globalLabel('VDD', 1000, flagY + 100))
-    items.push(symbolInstance(lib, 'PWR_FLAG', '#FLG2', 'PWR_FLAG', '', 1000, flagY + 300, ['1'], rootSheet, lib, { inBom: false, onBoard: false }))
-    items.push(wire(1000, flagY + 300, 1000, flagY + 400))
-    items.push(globalLabel('GND', 1000, flagY + 400))
+    const flagBounds = symbolBounds(flagSym)
+    const flagPin = symbolPins(flagSym)[0]
+    let fx = snap(SHEET_MARGIN + LABEL_W)
+    const fy = snap(cursorY - flagBounds.minY)
+    sheet.text('Power', SHEET_MARGIN, snap(cursorY - TEXT_H), 2.54)
+    for (const [i, net] of ['VDD', 'GND'].entries()) {
+      sheet.place(
+        symbolInstance({
+          lib,
+          symbolName: symName(flagSym),
+          ref: `#FLG${i + 1}`,
+          value: 'PWR_FLAG',
+          footprint: '',
+          x: fx,
+          y: fy,
+          pinNumbers: ['1'],
+          rootSheet,
+          projectName: lib,
+          inBom: false,
+          onBoard: false,
+          refAt: [0, r4(-flagBounds.maxY - 2.54)]
+        }),
+        fx,
+        fy,
+        flagBounds
+      )
+      const pt = pinPos(fx, fy, flagPin)
+      sheet.wire(pt.x, pt.y, pt.x, r4(pt.y + LEAD))
+      sheet.globalLabel(net, pt.x, r4(pt.y + LEAD), 270, 'output')
+      fx = snap(fx + 25.4)
+    }
+    cursorY = snap(sheet.bbox.maxY + 12.7)
   }
 
-  // pick paper size
-  let maxX = 2000
-  let maxY = 2000
-  for (const it of items) {
-    const o = op(it)
-    if (o === 'wire') {
-      const pts = child(it, 'pts')
-      for (const xy of children(pts, 'xy')) {
-        maxX = Math.max(maxX, parseFloat(xy.items[1].v))
-        maxY = Math.max(maxY, parseFloat(xy.items[2].v))
+  // --- switch matrix -------------------------------------------------------
+  if (c.hasSwitches) {
+    const swBounds = symbolBounds(swSym)
+    const dBounds = symbolBounds(dSym)
+    const sw1 = pinByNumber(swPins, '1', swSymName)
+    const sw2 = pinByNumber(swPins, '2', swSymName)
+    const dA = pinByNumber(dPins, '2', 'D_Matrix') // anode
+    const dK = pinByNumber(dPins, '1', 'D_Matrix') // cathode
+
+    // Offsets within a cell, measured from the cell's left edge.
+    const swOffX = snap(LABEL_W + LEAD - sw1.x)
+    const dOffX = snap(swOffX + sw2.x + LEAD - dA.x)
+    const cellW = snap(dOffX + dK.x + LEAD + LABEL_W)
+    const cellH = snap(
+      Math.max(swBounds.maxY - swBounds.minY, dBounds.maxY - dBounds.minY) + 2 * TEXT_H + 5.08
+    )
+    const rowOffY = snap(Math.max(swBounds.maxY, dBounds.maxY) + 2 * TEXT_H)
+
+    const availH = (pageH - TITLE_BLOCK_H - cursorY) * (c.hasLeds ? 0.45 : 1)
+    const perRow = cellsPerRow(c.rows * c.cols, c.cols, cellW, cellH, availW, availH)
+    const originX = SHEET_MARGIN
+    const originY = snap(cursorY + TEXT_H)
+
+    sheet.text(
+      `Switch matrix — ${c.rows} × ${c.cols}${perRow === c.cols ? '' : ` (wrapped at ${perRow} per row)`}`,
+      SHEET_MARGIN,
+      snap(cursorY - TEXT_H),
+      2.54
+    )
+
+    for (let r = 0; r < c.rows; r++) {
+      for (let col = 0; col < c.cols; col++) {
+        const seq = r * c.cols + col
+        const gx = perRow === c.cols ? col : seq % perRow
+        const gy = perRow === c.cols ? r : Math.floor(seq / perRow)
+        const cellX = snap(originX + gx * cellW)
+        const y = snap(originY + gy * cellH + rowOffY)
+        const idx = seq + 1
+        const swX = snap(cellX + swOffX)
+        const dX = snap(cellX + dOffX)
+
+        sheet.place(
+          symbolInstance({
+            lib,
+            symbolName: swSymName,
+            ref: `SW${idx}`,
+            value: swValue,
+            footprint: `${lib}:${c.switchFootprint}`,
+            x: swX,
+            y,
+            pinNumbers: [sw1.number, sw2.number],
+            rootSheet,
+            projectName: lib,
+            refAt: [0, r4(-swBounds.maxY - 1.27)]
+          }),
+          swX,
+          y,
+          swBounds
+        )
+        sheet.place(
+          symbolInstance({
+            lib,
+            symbolName: symName(dSym),
+            ref: `D${idx}`,
+            value: '1N4148W',
+            footprint: `${lib}:D_SOD123`,
+            x: dX,
+            y,
+            pinNumbers: [dK.number, dA.number],
+            rootSheet,
+            projectName: lib,
+            refAt: [0, r4(-dBounds.maxY - 1.27)]
+          }),
+          dX,
+          y,
+          dBounds
+        )
+
+        const p1 = pinPos(swX, y, sw1)
+        const p2 = pinPos(swX, y, sw2)
+        const pa = pinPos(dX, y, dA)
+        const pk = pinPos(dX, y, dK)
+
+        // ROW net -> switch pin 1
+        sheet.wire(r4(p1.x - LEAD), p1.y, p1.x, p1.y)
+        sheet.globalLabel(`ROW${r}`, r4(p1.x - LEAD), p1.y, 180)
+        // switch pin 2 -> diode anode (per-key net)
+        sheet.wire(p2.x, p2.y, pa.x, pa.y)
+        sheet.label(`SW${r}_${col}`, r4((p2.x + pa.x) / 2), p2.y)
+        // diode cathode -> COL net
+        sheet.wire(pk.x, pk.y, r4(pk.x + LEAD), pk.y)
+        sheet.globalLabel(`COL${col}`, r4(pk.x + LEAD), pk.y, 0)
+      }
+    }
+    cursorY = snap(sheet.bbox.maxY + 12.7)
+  }
+
+  // --- LED chain -----------------------------------------------------------
+  // Cells are laid out in chain order, not matrix order, so consecutive LEDs
+  // sit side by side and DOUT wires straight into the next DIN. Only the row
+  // breaks need a label pair, which keeps the drawing readable at any size.
+  if (c.hasLeds) {
+    const ledBounds = symbolBounds(ledSym)
+    const din = pinByName(ledPins, 'DI', ledSymName)
+    const dout = pinByName(ledPins, 'DO', ledSymName)
+    const vdd = pinByName(ledPins, 'VDD', ledSymName)
+    const gnd = pinByName(ledPins, 'GND', ledSymName)
+
+    // Gap between LEDs: the DOUT->DIN wire plus room for its net label.
+    const stepX = snap(dout.x - din.x + 3 * LEAD)
+    const rowLead = snap(LABEL_W + LEAD) // label + stub at each end of a row
+    const rowPitch = snap(vdd.y - gnd.y + 2 * (LEAD + LABEL_W) + TEXT_H)
+    const ledOffY = snap(vdd.y + LEAD + LABEL_W)
+
+    const n = c.rows * c.cols
+    const perRow = cellsPerRow(n, c.cols, stepX, rowPitch, availW - 2 * rowLead, pageH - TITLE_BLOCK_H - cursorY)
+    const originX = snap(SHEET_MARGIN + rowLead - din.x)
+    const originY = snap(cursorY + TEXT_H)
+
+    sheet.text(
+      `LED chain — ${n} × WS2812, DATA_IN → DATA_OUT (serpentine across the board)`,
+      SHEET_MARGIN,
+      snap(cursorY - TEXT_H),
+      2.54
+    )
+
+    // chain index -> matrix cell, the inverse of snakeIndex()
+    const cellOfChain = (k) => {
+      const r = Math.floor(k / c.cols)
+      const i = k % c.cols
+      return { r, col: r % 2 === 0 ? i : c.cols - 1 - i }
+    }
+
+    for (let k = 0; k < n; k++) {
+      const { r, col } = cellOfChain(k)
+      const gx = k % perRow
+      const gy = Math.floor(k / perRow)
+      const lx = snap(originX + gx * stepX)
+      const ly = snap(originY + gy * rowPitch + ledOffY)
+
+      sheet.place(
+        symbolInstance({
+          lib,
+          symbolName: ledSymName,
+          ref: `LED${r * c.cols + col + 1}`,
+          value: ledValue,
+          footprint: `${lib}:${c.ledFootprint}`,
+          x: lx,
+          y: ly,
+          pinNumbers: [pins.led.VDD, pins.led.DOUT, pins.led.GND, pins.led.DIN],
+          rootSheet,
+          projectName: lib,
+          refAt: [r4(-(dout.x - din.x) / 2), r4(-ledBounds.maxY + LEAD + LABEL_W - TEXT_H)],
+          refJustify: 'left'
+        }),
+        lx,
+        ly,
+        ledBounds
+      )
+
+      const pV = pinPos(lx, ly, vdd)
+      const pG = pinPos(lx, ly, gnd)
+      const pI = pinPos(lx, ly, din)
+      const pO = pinPos(lx, ly, dout)
+
+      sheet.wire(pV.x, pV.y, pV.x, r4(pV.y - LEAD))
+      sheet.globalLabel('VDD', pV.x, r4(pV.y - LEAD), 90, 'input')
+      sheet.wire(pG.x, pG.y, pG.x, r4(pG.y + LEAD))
+      sheet.globalLabel('GND', pG.x, r4(pG.y + LEAD), 270, 'input')
+
+      // DIN: chain start, row start, or a direct wire from the previous LED
+      if (k === 0) {
+        sheet.wire(r4(pI.x - LEAD), pI.y, pI.x, pI.y)
+        sheet.globalLabel('DATA_IN', r4(pI.x - LEAD), pI.y, 180, 'input')
+      } else if (gx === 0) {
+        sheet.wire(r4(pI.x - LEAD), pI.y, pI.x, pI.y)
+        sheet.label(dataNetName(k, n), r4(pI.x - LEAD), pI.y, 180)
+      }
+
+      // DOUT: chain end, row end, or straight into the next LED's DIN
+      if (k + 1 === n) {
+        sheet.wire(pO.x, pO.y, r4(pO.x + LEAD), pO.y)
+        sheet.globalLabel('DATA_OUT', r4(pO.x + LEAD), pO.y, 0, 'output')
+      } else if (gx === perRow - 1) {
+        sheet.wire(pO.x, pO.y, r4(pO.x + LEAD), pO.y)
+        sheet.label(dataNetName(k + 1, n), r4(pO.x + LEAD), pO.y, 0)
+      } else {
+        // Straight into the next LED's DIN. The link still carries its net
+        // label so the schematic and the board agree on the net name.
+        const nextIn = pinPos(snap(lx + stepX), ly, din)
+        sheet.wire(pO.x, pO.y, nextIn.x, nextIn.y)
+        sheet.label(dataNetName(k + 1, n), pO.x, pO.y, 0)
       }
     }
   }
-  const paper = pickPaper(maxX + 1000, maxY + 1000)
 
+  return sheet
+}
+
+function assembleSchematic(c, rootSheet, sheet, [pw, ph], paperName) {
   const titleBlock = list(
     'title_block',
     list('title', str(c.silkText)),
@@ -506,6 +919,10 @@ function buildSchematic(c, nets, pins, rootSheet) {
     list('comment', atom(8), str('')),
     list('comment', atom(9), str(''))
   )
+  const paperNode =
+    paperName === 'User'
+      ? list('paper', str('User'), atom(mm(pw)), atom(mm(ph)))
+      : list('paper', str(paperName))
 
   return list(
     'kicad_sch',
@@ -513,24 +930,12 @@ function buildSchematic(c, nets, pins, rootSheet) {
     list('generator', str('eeschema')),
     list('generator_version', str('8.0')),
     list('uuid', str(rootSheet)),
-    list('paper', str(paper)),
+    paperNode,
     titleBlock,
-    list('lib_symbols', ...symbols),
-    ...items,
+    list('lib_symbols', ...sheet.libSymbols),
+    ...sheet.items,
     list('sheet_instances', list('path', str('/'), list('page', str('1'))))
   )
-}
-
-function pickPaper(w, h) {
-  const sizes = [
-    ['A4', 11693, 8268],
-    ['A3', 16535, 11693],
-    ['A2', 23386, 16535],
-    ['A1', 33110, 23386],
-    ['A0', 46811, 33110]
-  ]
-  for (const [name, pw, ph] of sizes) if (w <= pw && h <= ph) return name
-  return 'A0'
 }
 
 // ---------------------------------------------------------------------------
@@ -694,11 +1099,10 @@ function buildPcb(c, nets, pins, registry) {
 
   if (c.hasLeds) {
     const ledFp = registry[c.ledFootprint]
+    // Pad -> function comes from the library symbol, so schematic and board
+    // can never disagree about which pad is DIN.
     const fnMap = {}
-    for (const pad of ledFp.pads) {
-      const f = ledPadFunction(ledFp.name, pad.number)
-      if (f) fnMap[pad.number] = f
-    }
+    for (const [fn, num] of Object.entries(pins.led)) fnMap[num] = fn
     const n = c.rows * c.cols
     for (let r = 0; r < c.rows; r++) {
       for (let col = 0; col < c.cols; col++) {
@@ -942,13 +1346,24 @@ function buildProjectJson(c, rootSheet) {
 // ---------------------------------------------------------------------------
 // Symbol library (.kicad_sym)
 
-function buildSymbolLib(c, pins) {
+function buildSymbolLib(c, symlib) {
+  const lib = c.name
   const symbols = []
   if (c.hasSwitches) {
-    symbols.push(makeSwitchSymbol())
-    symbols.push(makeDiodeSymbol())
+    const sw = libSymbol(symlib, SWITCH_SYMBOL_FOR[c.switchFootprint])
+    setSymbolFootprint(sw, `${lib}:${c.switchFootprint}`)
+    symbols.push(sw)
+    const d = makeDiodeSymbol()
+    setSymbolFootprint(d, `${lib}:D_SOD123`)
+    symbols.push(d)
   }
-  if (c.hasLeds) symbols.push(makeLedSymbol(pins.led))
+  if (c.hasLeds) {
+    const led = libSymbol(symlib, LED_SYMBOL_FOR[c.ledFootprint])
+    setSymbolFootprint(led, `${lib}:${c.ledFootprint}`)
+    symbols.push(led)
+  }
+  symbols.push(makeControllerSymbol(c.hasSwitches ? c.rows : 0, c.hasSwitches ? c.cols : 0, c.hasLeds))
+  if (c.hasLeds) symbols.push(makePowerFlagSymbol())
   return list(
     'kicad_symbol_lib',
     list('version', atom(20231120)),
@@ -956,6 +1371,32 @@ function buildSymbolLib(c, pins) {
     list('generator_version', str('8.0')),
     ...symbols
   )
+}
+
+// ---------------------------------------------------------------------------
+// Project library tables
+//
+// KiCad resolves a "lib:name" lib_id through the project's sym-lib-table and
+// fp-lib-table. Without them every symbol and footprint in the project reads as
+// unresolved, regardless of what .kicad_pro pins.
+
+function buildLibTables(c) {
+  const lib = c.name
+  const symTable = [
+    '(sym_lib_table',
+    '\t(version 7)',
+    `\t(lib (name "${lib}")(type "KiCad")(uri "\${KIPRJMOD}/${lib}.kicad_sym")(options "")(descr "Matrix symbols"))`,
+    ')',
+    ''
+  ].join('\n')
+  const fpTable = [
+    '(fp_lib_table',
+    '\t(version 7)',
+    `\t(lib (name "${lib}")(type "KiCad")(uri "\${KIPRJMOD}/${lib}.pretty")(options "")(descr "Matrix footprints"))`,
+    ')',
+    ''
+  ].join('\n')
+  return { symTable, fpTable }
 }
 
 // ---------------------------------------------------------------------------
@@ -974,6 +1415,7 @@ function buildReadme(c, rootSheet) {
   lines.push(`- \`${c.name}.kicad_pcb\` — board (footprints placed, nets assigned, outline drawn)`)
   lines.push(`- \`${c.name}.kicad_sym\` — symbol library`)
   lines.push(`- \`${c.name}.pretty/\` — footprint library`)
+  lines.push('- `sym-lib-table`, `fp-lib-table` — project library tables (how KiCad resolves the above)')
   lines.push(`- \`Libraries/\` — 3D models used by the footprints`)
   lines.push('')
   lines.push('## Configuration')
@@ -996,6 +1438,11 @@ function buildReadme(c, rootSheet) {
   lines.push('- The switch matrix nets (ROW*, COL*) are assigned but unrouted — route them')
   lines.push('  with the interactive router, or keep the airwires for manual routing.')
   lines.push('- Footprint 3D models are included under `Libraries/` so the 3D viewer works.')
+  lines.push('- `U1` is a placeholder for your controller: it carries the ROW/COL (and')
+  lines.push('  GND/VDD/DATA) connections for ERC but is not placed on the board. Replace it')
+  lines.push('  with your real MCU or connector symbol.')
+  lines.push('- Nets cross between blocks via global labels, so the switch matrix, the LED')
+  lines.push('  chain and the controller connect without wires running across the sheet.')
   lines.push('')
   return lines.join('\n')
 }
@@ -1003,32 +1450,36 @@ function buildReadme(c, rootSheet) {
 // ---------------------------------------------------------------------------
 // Top-level entry point
 
-/** Generate the complete project. Returns { files, summary }. */
-export function generateProject(config, registry) {
+/**
+ * Generate the complete project. Returns { files, summary }.
+ * `symlib` is the parsed bundled symbol library (see parseSymbolLibrary).
+ */
+export function generateProject(config, registry, symlib) {
   const c = normalizeConfig(config)
+  if (!symlib || !symlib.symbols) throw new Error('generateProject requires a parsed symbol library')
   const nets = buildNets(c)
   const rootSheet = uuid()
 
-  // LED pin numbers per function, used by schematic + symbol lib
+  // LED pad numbers per function, read from the library symbol for this
+  // footprint variant — the pad numbering differs between 5050/3535/2020/1615.
   const pins = {}
   if (c.hasLeds) {
     const ledFp = registry[c.ledFootprint]
     if (!ledFp) throw new Error(`Unknown LED footprint: ${c.ledFootprint}`)
-    const p = {}
-    for (const pad of ledFp.pads) {
-      const f = ledPadFunction(ledFp.name, pad.number)
-      if (f && !(f in p)) p[f] = pad.number
+    const ledSymName = LED_SYMBOL_FOR[c.ledFootprint]
+    if (!ledSymName) throw new Error(`No schematic symbol mapped for LED footprint ${c.ledFootprint}`)
+    pins.led = ledPinNumbers(libSymbol(symlib, ledSymName))
+    const padNumbers = new Set(ledFp.pads.map((p) => p.number))
+    for (const [fn, num] of Object.entries(pins.led)) {
+      if (!padNumbers.has(num)) {
+        throw new Error(`${ledSymName} pin ${fn} is pad "${num}", which ${c.ledFootprint} does not have`)
+      }
     }
-    if (!(p.VDD && p.DOUT && p.GND && p.DIN)) {
-      throw new Error(`Could not map VDD/DOUT/GND/DIN pins for ${c.ledFootprint}`)
-    }
-    // canonical order must match the symbol pin order (VDD, DOUT, GND, DIN)
-    pins.led = { VDD: p.VDD, DOUT: p.DOUT, GND: p.GND, DIN: p.DIN }
   }
 
   const files = []
 
-  const schTree = buildSchematic(c, nets, pins, rootSheet)
+  const schTree = buildSchematic(c, nets, pins, rootSheet, symlib)
   files.push({ path: `${c.name}/${c.name}.kicad_sch`, content: serialize(schTree) + '\n' })
 
   const pcbTree = buildPcb(c, nets, pins, registry)
@@ -1036,7 +1487,7 @@ export function generateProject(config, registry) {
 
   files.push({ path: `${c.name}/${c.name}.kicad_pro`, content: buildProjectJson(c, rootSheet) + '\n' })
 
-  const symLib = buildSymbolLib(c, pins)
+  const symLib = buildSymbolLib(c, symlib)
   files.push({ path: `${c.name}/${c.name}.kicad_sym`, content: serialize(symLib) + '\n' })
 
   // Footprint library
@@ -1051,6 +1502,10 @@ export function generateProject(config, registry) {
     path: `${c.name}/${c.name}.pretty/D_SOD123.kicad_mod`,
     content: serialize(makeDiodeFootprint()) + '\n'
   })
+
+  const tables = buildLibTables(c)
+  files.push({ path: `${c.name}/sym-lib-table`, content: tables.symTable })
+  files.push({ path: `${c.name}/fp-lib-table`, content: tables.fpTable })
 
   files.push({ path: `${c.name}/README.md`, content: buildReadme(c, rootSheet) })
 

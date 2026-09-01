@@ -142,6 +142,10 @@
             </q-card>
 
             <q-card class="q-pa-md">
+              <q-banner v-if="genError" dense class="bg-red-1 text-red-9 q-mb-md">
+                <template #avatar><q-icon name="warning" color="red-8" /></template>
+                {{ genError }}
+              </q-banner>
               <FilesPreview :files="generated ? generated.files : []" />
             </q-card>
           </div>
@@ -157,12 +161,13 @@ import { useQuasar } from 'quasar'
 import logo from '../assets/logo/logo.png'
 import BoardPreview from '../components/BoardPreview.vue'
 import FilesPreview from '../components/FilesPreview.vue'
-import { buildRegistry, SWITCH_FOOTPRINTS, LED_FOOTPRINTS } from '../kicad/footprints.js'
+import { buildRegistry, buildSymbolLibrary, SWITCH_FOOTPRINTS, LED_FOOTPRINTS } from '../kicad/footprints.js'
 import { normalizeConfig, generateProject, computeLayout } from '../kicad/generator.js'
 import { buildZip, downloadBlob } from '../kicad/zip.js'
 
 const $q = useQuasar()
 const registry = buildRegistry()
+const symlib = buildSymbolLibrary()
 
 const config = reactive({
   name: 'my_keyboard',
@@ -193,13 +198,18 @@ const leds = computed(() => (hasLeds.value ? config.rows * config.cols : 0))
 const layout = computed(() => computeLayout(config, registry))
 
 const generated = ref(null)
+const genError = ref('')
 const downloading = ref(false)
 
 function generatePreview() {
   try {
-    generated.value = generateProject(config, registry)
+    generated.value = generateProject(config, registry, symlib)
+    genError.value = ''
   } catch (e) {
+    // e.g. a matrix too large for a single schematic sheet — say so rather
+    // than leaving the preview mysteriously empty
     generated.value = null
+    genError.value = e.message || 'Generation failed'
   }
 }
 
@@ -217,8 +227,9 @@ async function download() {
   downloading.value = true
   try {
     const normalized = normalizeConfig(config)
-    const project = generateProject(normalized, registry)
+    const project = generateProject(normalized, registry, symlib)
     generated.value = project
+    genError.value = ''
     const blob = await buildZip(project, registry, normalized, {
       includeModels: config.includeModels,
       includeLogo: config.includeLogo

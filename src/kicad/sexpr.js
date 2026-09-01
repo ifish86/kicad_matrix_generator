@@ -94,7 +94,17 @@ export function serialize(node, indent = 0) {
     if (!hasSublist) {
       return '(' + node.items.map((it) => serialize(it, 0)).join(' ') + ')'
     }
-    const parts = node.items.map((it) => serialize(it, indent + 1))
+    // Keep the operator and its leading scalar arguments on one line — the way
+    // KiCad writes them, e.g. `(symbol "Device:R"` — then one nested list per
+    // line. Without this every name ends up orphaned on a line of its own.
+    let lead = 0
+    while (lead < node.items.length && node.items[lead].t !== 'list') lead++
+    const head = node.items
+      .slice(0, lead)
+      .map((it) => serialize(it, 0))
+      .join(' ')
+    const rest = node.items.slice(lead).map((it) => serialize(it, indent + 1))
+    const parts = head ? [head, ...rest] : rest
     return '(' + parts.join('\n' + pad + '\t') + ')'
   }
   throw new Error('Unknown node type')

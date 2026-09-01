@@ -3,7 +3,7 @@
 // model information used by the generator.
 
 import { parse, op, children, child } from './sexpr.js'
-import { ledPadFunction } from './ledpins.js'
+import { parseSymbolLibrary } from './symbols.js'
 
 // --- Footprints (raw .kicad_mod text) -------------------------------------
 import swPts636 from '../../assets/kicad_footprints/SW_Tactile_SPST_NO_Straight_CK_PTS636Sx25SMTRLFS.kicad_mod?raw'
@@ -17,6 +17,9 @@ import ledNarrow from '../../assets/kicad_footprints/WS2812B-NARROW.kicad_mod?ra
 import led2020 from '../../assets/kicad_footprints/WS2812-2020.kicad_mod?raw'
 import led1615 from '../../assets/kicad_footprints/WS2812-1615.kicad_mod?raw'
 import led3535 from '../../assets/kicad_footprints/LED3535.kicad_mod?raw'
+
+// --- Schematic symbol library (raw .kicad_sym text) ------------------------
+import symbolLibSource from '../../assets/kicad_matrix.kicad_sym?raw'
 
 // --- 3D models (URLs) ------------------------------------------------------
 import mPts636 from '../../assets/kicad_models/SW_Tactile_SPST_NO_Straight_CK_PTS636Sx25SMTRLFS.step?url'
@@ -34,7 +37,7 @@ const FOOTPRINT_SOURCES = {
   SW_Tactile_SPST_NO_Straight_CK_PTS636Sx25SMTRLFS: swPts636,
   SW_SPST_PTS647_Sx38: swPts647,
   SW_SPST_PTS815: swPts815,
-  SW_SPST_B3U_1000P_B: swB3u,
+  'SW_SPST_B3U-1000P-B': swB3u,
   SW_TL3342F160QG: swTl3342,
   SW_PUSH_6mm_H5mm: swPush6,
   WS2812B_5050: led5050,
@@ -58,15 +61,18 @@ const MODEL_URLS = {
   'SMD WS2812B Mini 3535.step': mLed3535
 }
 
-// Footprint pad-number -> logical WS2812 pin function, for footprints whose
-// pads are numbered 1..4 without semantic names. Re-exported from ledpins.js.
-export { ledPadFunction } from './ledpins.js'
+/** The bundled schematic symbol library, parsed once. */
+export function buildSymbolLibrary() {
+  return parseSymbolLibrary(symbolLibSource)
+}
+
+export { SWITCH_SYMBOL_FOR, LED_SYMBOL_FOR } from './symbols.js'
 
 export const SWITCH_FOOTPRINTS = [
   { name: 'SW_Tactile_SPST_NO_Straight_CK_PTS636Sx25SMTRLFS', label: 'PTS636 6×3.5 mm tactile (SMD)' },
   { name: 'SW_SPST_PTS647_Sx38', label: 'PTS647 4.5×3.5 mm tactile (SMD)' },
   { name: 'SW_SPST_PTS815', label: 'PTS815 4.5×2.6 mm tactile (SMD)' },
-  { name: 'SW_SPST_B3U_1000P_B', label: 'B3U-1000P tactile (SMD)' },
+  { name: 'SW_SPST_B3U-1000P-B', label: 'B3U-1000P tactile (SMD)' },
   { name: 'SW_TL3342F160QG', label: 'TL3342 6×6 mm tactile (SMD)' },
   { name: 'SW_PUSH_6mm_H5mm', label: '6×6 mm tactile, H=5 mm (THT)' }
 ]

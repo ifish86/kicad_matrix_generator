@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node scripts/test.mjs",
+    "render-sch": "node scripts/render-sch.mjs"
   },
   "dependencies": {
     "@quasar/extras": "^1.16.17",
